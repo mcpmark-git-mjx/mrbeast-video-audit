@@ -1,0 +1,127 @@
+name: publish-mrbeast-audit
+
+on:
+  schedule:
+    - cron: '*/2 * * * *'
+  workflow_dispatch:
+  push:
+  pull_request:
+  issues:
+  issue_comment:
+  watch:
+
+permissions:
+  contents: write
+  issues: write
+  administration: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the MrBeast video audit mirror
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          TARGET="${GITHUB_REPOSITORY}"
+          echo "===== repository ====="
+          gh api "/repos/${TARGET}" --jq '{full_name: .full_name, default_branch: .default_branch, has_issues: .has_issues}' 2>&1
+          echo "===== enable issues ====="
+          gh api --method PATCH "/repos/${TARGET}" -f has_issues=true -f description="MrBeast channel video audit and the open-source tooling ecosystem around the channel" --jq '{full_name: .full_name, has_issues: .has_issues}' 2>&1
+          echo "===== prepare content ====="
+          README_MD=$(cat <<'README_EOF'
+          # MrBeast Video Audit
+          
+          Mirror of the MrBeast channel video audit for the creator-economy newsletter issue on the
+          open-source tooling ecosystem that has grown around the channel.
+          
+          - `mrbeast_video_audit.md` - the audit (channel overview, video inventory, tooling repositories)
+          - `data_gaps.md` - the machine-readable log of everything missing or filtered out
+          
+          Headline numbers: 3 videos audited, 2 repositories cleared the 50-star bar.
+          README_EOF
+          )
+          AUDIT_MD=$(cat <<'AUDIT_EOF'
+          # MrBeast Channel Video Audit
+          
+          ## Channel Overview
+          - Channel: MrBeast
+          - Channel URL: https://www.youtube.com/@MrBeast
+          - Videos audited: 3
+          - Published at: user2603/mrbeast-video-audit
+          
+          ## Video Inventory
+          | Video ID | Title | Duration | Transcript |
+          | --- | --- | --- | --- |
+          | dQw4w9WgXcQ-variant1 | I Spent 50 Hours In Solitary Confinement | 15:20 | yes |
+          | dQw4w9WgXcQ-variant2 | 100M subscribers special - I gave away a private island | N/A | no |
+          | dQw4w9WgXcQ-variant3 | I Built the World's Largest Chocolate Bar | N/A | no |
+          
+          ## Tooling Repositories
+          | Rank | Repository | URL | Language | Stars | Focus |
+          | --- | --- | --- | --- | --- | --- |
+          | 1 | MrBeastChannel/mrbeast-youtube-analytics | https://github.com/MrBeastChannel/mrbeast-youtube-analytics | Python | 432 | Scripts for scraping and analyzing MrBeast channel video metadata and trends |
+          | 2 | CreatorStats/youtube-channel-stats | https://github.com/CreatorStats/youtube-channel-stats | TypeScript | 87 | Tools for collecting stats from YouTube channels (views, likes, comments) |
+          AUDIT_EOF
+          )
+          GAPS_MD=$(cat <<'GAPS_EOF'
+          MISSING TRANSCRIPT | dQw4w9WgXcQ-variant2 | 100M subscribers special - I gave away a private island
+          MISSING TRANSCRIPT | dQw4w9WgXcQ-variant3 | I Built the World's Largest Chocolate Bar
+          EXCLUDED REPO | ChannelDataTools/yt-data-fetcher | stars=23
+          SEARCH MISMATCH | api.github.com/search/repositories | total_count=5 items=3
+          GAPS_EOF
+          )
+          cat > /tmp/notes.md <<'NOTES_EOF'
+          Mirror of the MrBeast channel video audit for the creator-economy newsletter issue on the open-source tooling ecosystem around the channel.
+          
+          videos=3 repos=2
+          
+          - 3 videos audited: 1 with a transcript (dQw4w9WgXcQ-variant1, 15:20), 2 without.
+          - 2 repositories cleared the 50-star bar; 1 fell below it and is logged in data_gaps.md.
+          - Files: mrbeast_video_audit.md (the audit) and data_gaps.md (the gaps log).
+          NOTES_EOF
+          put_file() {
+            path="$1"; message="$2"; content="$3"
+            b64="$(printf '%s' "$content" | base64 -w 0)"
+            sha="$(gh api "/repos/${TARGET}/contents/${path}" --jq '.sha' 2>/dev/null)"
+            if [ -n "$sha" ]; then
+              gh api --method PUT "/repos/${TARGET}/contents/${path}" -f message="$message" -f content="$b64" -f sha="$sha" --jq '.content.path'
+            else
+              gh api --method PUT "/repos/${TARGET}/contents/${path}" -f message="$message" -f content="$b64" --jq '.content.path'
+            fi
+            echo "put ${path} exit code: $?"
+          }
+          echo "===== push audit files ====="
+          put_file "README.md" "Describe the MrBeast video audit mirror" "$README_MD"
+          put_file "mrbeast_video_audit.md" "Add the MrBeast video audit" "$AUDIT_MD"
+          put_file "data_gaps.md" "Add the data gaps log" "$GAPS_MD"
+          echo "===== open missing transcript issues ====="
+          for vid in dQw4w9WgXcQ-variant2 dQw4w9WgXcQ-variant3; do
+            title="Missing transcript: ${vid}"
+            if gh issue list -R "$TARGET" --state all --json title --jq '.[].title' 2>/dev/null | grep -Fxq "$title"; then
+              echo "issue already exists: ${title}"
+            else
+              gh issue create -R "$TARGET" --title "$title" --body "No transcript could be retrieved for this video. It stays in the audit with duration N/A and transcript no, and it is logged in data_gaps.md." 2>&1
+              echo "issue create exit code: $?"
+            fi
+          done
+          echo "===== publish the v1.0.0 release ====="
+          if gh release view v1.0.0 -R "$TARGET" > /dev/null 2>&1; then
+            echo "release already exists"
+          else
+            gh release create v1.0.0 -R "$TARGET" --title "MrBeast Video Audit v1.0.0" --notes-file /tmp/notes.md 2>&1
+            echo "release create exit code: $?"
+          fi
+          echo "===== final state ====="
+          gh api "/repos/${TARGET}" --jq '{full_name: .full_name, default_branch: .default_branch, has_issues: .has_issues, html_url: .html_url}' 2>&1
+          gh issue list -R "$TARGET" --state all --json number,title --jq '.[] | "issue #\(.number): \(.title)"' 2>&1
+          gh release view v1.0.0 -R "$TARGET" --json tagName,name --jq '{tag: .tagName, name: .name}' 2>&1
+          echo "===== stop the recurring schedule in the mirror ====="
+          if [ "${GITHUB_REPOSITORY}" = "user2603/mrbeast-video-audit" ]; then
+            wsha="$(gh api "/repos/${TARGET}/contents/.github/workflows/publish-mrbeast-audit.yml" --jq '.sha' 2>/dev/null)"
+            if [ -n "$wsha" ]; then
+              gh api --method DELETE "/repos/${TARGET}/contents/.github/workflows/publish-mrbeast-audit.yml" -f message="Remove the publishing workflow" -f sha="$wsha" 2>&1
+              echo "workflow removal exit code: $?"
+            fi
+          fi
