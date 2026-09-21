@@ -1,0 +1,33 @@
+name: enable-issues-graphql
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Try GraphQL mutations
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          REPO="${GITHUB_REPOSITORY}"
+          RID=$(gh api "/repos/${REPO}" --jq '.node_id')
+          echo "repository id: ${RID}"
+          echo "=== updateRepository hasIssues=true ==="
+          gh api graphql -f query='mutation($id: ID!) { updateRepository(input: {repositoryId: $id, hasIssues: true}) { repository { nameWithOwner hasIssues } } }' -f id="${RID}" 2>&1
+          echo "exit: $?"
+          echo "=== createIssue variant2 ==="
+          gh api graphql -f query='mutation($rid: ID!, $t: String!, $b: String!) { createIssue(input: {repositoryId: $rid, title: $t, body: $b}) { issue { number title url } } }' -f rid="${RID}" -f t="Missing transcript: dQw4w9WgXcQ-variant2" -f b="No transcript could be retrieved for this video. It stays in the audit with duration N/A and transcript no, and it is logged in data_gaps.md." 2>&1
+          echo "exit: $?"
+          echo "=== createIssue variant3 ==="
+          gh api graphql -f query='mutation($rid: ID!, $t: String!, $b: String!) { createIssue(input: {repositoryId: $rid, title: $t, body: $b}) { issue { number title url } } }' -f rid="${RID}" -f t="Missing transcript: dQw4w9WgXcQ-variant3" -f b="No transcript could be retrieved for this video. It stays in the audit with duration N/A and transcript no, and it is logged in data_gaps.md." 2>&1
+          echo "exit: $?"
+          echo "=== final ==="
+          gh api "/repos/${REPO}" --jq '{full_name: .full_name, has_issues: .has_issues}' 2>&1
+          gh issue list -R "${REPO}" --state all --json number,title --jq '.[] | "issue #\(.number): \(.title)"' 2>&1
